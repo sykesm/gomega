@@ -19,6 +19,12 @@ import (
 
 const INVALID_EXIT_CODE = 254
 
+type EventualWithOffset interface {
+	EventuallyWithOffset(offset int, actual interface{}, intervals ...interface{}) AsyncAssertion
+}
+
+type eventuallyWithOffset func(offset int, actual interface{}, intervals ...interface{}) AsyncAssertion
+
 type Session struct {
 	//The wrapped command
 	Command *exec.Cmd
@@ -31,6 +37,8 @@ type Session struct {
 
 	//A channel that will close when the command exits
 	Exited <-chan struct{}
+
+	eventuallyWithOffset eventuallyWithOffset
 
 	lock     *sync.Mutex
 	exitCode int
@@ -65,15 +73,28 @@ When the session exits it closes the stdout and stderr gbytes buffers.  This wil
 Eventuallys waiting for the buffers to Say something.
 */
 func Start(command *exec.Cmd, outWriter io.Writer, errWriter io.Writer) (*Session, error) {
+	return start(command, outWriter, errWriter, nil)
+}
+
+func StartWith(ewo EventualWithOffset, command *exec.Cmd, outWriter, errWriter io.Writer) (*Session, error) {
+	return start(command, outWriter, errWriter, ewo.EventuallyWithOffset)
+}
+
+func start(command *exec.Cmd, outWriter io.Writer, errWriter io.Writer, ewo eventuallyWithOffset) (*Session, error) {
 	exited := make(chan struct{})
 
+	if ewo == nil {
+		ewo = EventuallyWithOffset
+	}
+
 	session := &Session{
-		Command:  command,
-		Out:      gbytes.NewBuffer(),
-		Err:      gbytes.NewBuffer(),
-		Exited:   exited,
-		lock:     &sync.Mutex{},
-		exitCode: -1,
+		Command:              command,
+		Out:                  gbytes.NewBuffer(),
+		Err:                  gbytes.NewBuffer(),
+		Exited:               exited,
+		eventuallyWithOffset: ewo,
+		lock:                 &sync.Mutex{},
+		exitCode:             -1,
 	}
 
 	var commandOut, commandErr io.Writer
@@ -142,7 +163,7 @@ will wait for the command to exit then return the entirety of Out's contents.
 Wait uses eventually under the hood and accepts the same timeout/polling intervals that eventually does.
 */
 func (s *Session) Wait(timeout ...interface{}) *Session {
-	EventuallyWithOffset(1, s, timeout...).Should(Exit())
+	s.eventuallyWithOffset(1, s, timeout...).Should(Exit())
 	return s
 }
 
